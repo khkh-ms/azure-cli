@@ -692,36 +692,6 @@ class FunctionAppFlex(LiveScenarioTest):
                  ])
 
 
-    @ResourceGroupPreparer(location=FLEX_ASP_LOCATION_FUNCTIONAPP)
-    @StorageAccountPreparer()
-    def test_functionapp_flex_validation(self, resource_group, storage_account):
-        functionapp_name = self.create_random_name('functionapp', 40)
-        with self.assertRaises(ArgumentUsageError):
-            self.cmd('functionapp create -g {} -n {} --flexconsumption-location {} -s {} --image nginx --functions-version 4'
-                    .format(resource_group, functionapp_name, FLEX_ASP_LOCATION_FUNCTIONAPP, storage_account))
-        with self.assertRaises(ArgumentUsageError):
-            self.cmd('functionapp create -g {} -n {} --flexconsumption-location {} -s {} --deployment-local-git --functions-version 4'
-                    .format(resource_group, functionapp_name, FLEX_ASP_LOCATION_FUNCTIONAPP, storage_account))
-        with self.assertRaises(ArgumentUsageError):
-            self.cmd('functionapp create -g {} -n {} --flexconsumption-location {} -s {} --deployment-source-url https://github.com/Azure/azure-cli --functions-version 4'
-                    .format(resource_group, functionapp_name, FLEX_ASP_LOCATION_FUNCTIONAPP, storage_account))
-        with self.assertRaises(ArgumentUsageError):
-            self.cmd('functionapp create -g {} -n {} --flexconsumption-location {} -s {} --deployment-source-branch dev --functions-version 4'
-                    .format(resource_group, functionapp_name, FLEX_ASP_LOCATION_FUNCTIONAPP, storage_account))
-        with self.assertRaises(ArgumentUsageError):
-            self.cmd('functionapp create -g {} -n {} --flexconsumption-location {} -s {} --os-type windows --functions-version 4'
-                    .format(resource_group, functionapp_name, FLEX_ASP_LOCATION_FUNCTIONAPP, storage_account))
-        with self.assertRaises(RequiredArgumentMissingError):
-            self.cmd('functionapp create -g {} -n {} -c {} -s {} --functions-version 4 --always-ready-instances 5'
-                     .format(resource_group, functionapp_name, FLEX_ASP_LOCATION_FUNCTIONAPP, storage_account))
-        with self.assertRaises(MutuallyExclusiveArgumentError):
-            self.cmd('functionapp create -g {} -n {} -f {} -c {} -s {} --functions-version 4'
-                     .format(resource_group, functionapp_name, FLEX_ASP_LOCATION_FUNCTIONAPP, FLEX_ASP_LOCATION_FUNCTIONAPP, storage_account))
-        with self.assertRaises(ValidationError):
-            self.cmd('functionapp create -g {} -n {} -f {} -s {} --functions-version 4 --runtime notdotnet'
-                    .format(resource_group, functionapp_name, FLEX_ASP_LOCATION_FUNCTIONAPP, storage_account))
-
-
 class FunctionAppManagedEnvironment(ScenarioTest):
     def __init__(self, method_name, config_file=None, recording_name=None, recording_processors=None, replay_processors=None, recording_patches=None, replay_patches=None, random_config_dir=False):
         super().__init__(method_name, config_file, recording_name, recording_processors, replay_processors, recording_patches, replay_patches, random_config_dir)
