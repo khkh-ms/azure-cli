@@ -580,7 +580,7 @@ def update_azure_storage_account(cmd, resource_group_name, name, custom_id, stor
     return _redact_storage_accounts(result.properties)
 
 
-def enable_zip_deploy_functionapp(cmd, resource_group_name, name, src, build_remote=False, timeout=None, slot=None):
+def enable_zip_deploy_functionapp(cmd, resource_group_name, name, src, build_remote=None, timeout=None, slot=None):
     check_language_runtime(cmd, resource_group_name, name)
     client = web_client_factory(cmd.cli_ctx)
     app = client.web_apps.get(resource_group_name, name)
@@ -612,6 +612,7 @@ def enable_zip_deploy_functionapp(cmd, resource_group_name, name, src, build_rem
         enable_zip_deploy_flex(cmd, resource_group_name, name, src, timeout, slot, build_remote)
         response = check_flex_app_after_deployment(cmd, resource_group_name, name)
         return response
+    build_remote = build_remote == 'true' or False
     if (not build_remote) and is_consumption and app.reserved:
         return upload_zip_to_storage(cmd, resource_group_name, name, src, slot)
     if build_remote and app.reserved:
@@ -662,13 +663,17 @@ def check_flex_app_after_deployment(cmd, resource_group_name, name):
     return "Deployment was successful."
 
 
-def enable_zip_deploy_flex(cmd, resource_group_name, name, src, timeout=None, slot=None, build_remote=False):
+def enable_zip_deploy_flex(cmd, resource_group_name, name, src, timeout=None, slot=None, build_remote=None):
     logger.warning("Getting scm site credentials for zip deployment")
 
     try:
         scm_url = _get_scm_url(cmd, resource_group_name, name, slot)
     except ValueError:
         raise ResourceNotFoundError('Failed to fetch scm url for function app')
+
+    runtime_config = get_runtime_config(cmd, resource_group_name, name)
+    runtime = runtime_config.get("name", "")
+    build_remote = build_remote or runtime == 'python'
 
     zip_url = scm_url + '/api/publish?RemoteBuild={}&Deployer=az_cli'.format(build_remote)
     deployment_status_url = scm_url + '/api/deployments/latest'
@@ -2324,7 +2329,7 @@ def _resolve_hostname_through_dns(hostname):
     return socket.gethostbyname(hostname)
 
 
-def create_webapp_slot(cmd, resource_group_name, name, slot, configuration_source=None,
+def create_webapp_slot(cmd, resource_group_name, webapp, slot, configuration_source=None,
                        deployment_container_image_name=None, docker_registry_server_password=None,
                        docker_registry_server_user=None):
     container_args = deployment_container_image_name or docker_registry_server_password or docker_registry_server_user
@@ -2337,13 +2342,13 @@ def create_webapp_slot(cmd, resource_group_name, name, slot, configuration_sourc
 
     Site, SiteConfig, NameValuePair = cmd.get_models('Site', 'SiteConfig', 'NameValuePair')
     client = web_client_factory(cmd.cli_ctx)
-    site = client.web_apps.get(resource_group_name, name)
-    site_config = get_site_configs(cmd, resource_group_name, name, None)
+    site = client.web_apps.get(resource_group_name, webapp)
+    site_config = get_site_configs(cmd, resource_group_name, webapp, None)
     if not site:
-        raise ResourceNotFoundError("'{}' app doesn't exist".format(name))
+        raise ResourceNotFoundError("'{}' app doesn't exist".format(webapp))
     if 'functionapp' in site.kind:
         raise ValidationError("'{}' is a function app. Please use "
-                              "`az functionapp deployment slot create`.".format(name))
+                              "`az functionapp deployment slot create`.".format(webapp))
     location = site.location
     slot_def = Site(server_farm_id=site.server_farm_id, location=location)
     slot_def.site_config = SiteConfig()
@@ -2352,9 +2357,9 @@ def create_webapp_slot(cmd, resource_group_name, name, slot, configuration_sourc
     # app settings to perform the container image validation:
     if configuration_source and site_config.windows_fx_version:
         # get settings from the source
-        clone_from_prod = configuration_source.lower() == name.lower()
+        clone_from_prod = configuration_source.lower() == webapp.lower()
         src_slot = None if clone_from_prod else configuration_source
-        app_settings = _generic_site_operation(cmd.cli_ctx, resource_group_name, name,
+        app_settings = _generic_site_operation(cmd.cli_ctx, resource_group_name, webapp,
                                                'list_application_settings', src_slot)
         settings = []
         for k, v in app_settings.properties.items():
@@ -2362,11 +2367,11 @@ def create_webapp_slot(cmd, resource_group_name, name, slot, configuration_sourc
                      "DOCKER_REGISTRY_SERVER_URL"):
                 settings.append(NameValuePair(name=k, value=v))
         slot_def.site_config = SiteConfig(app_settings=settings)
-    poller = client.web_apps.begin_create_or_update_slot(resource_group_name, name, site_envelope=slot_def, slot=slot)
+    poller = client.web_apps.begin_create_or_update_slot(resource_group_name, webapp, site_envelope=slot_def, slot=slot)
     result = LongRunningOperation(cmd.cli_ctx)(poller)
 
     if configuration_source:
-        update_slot_configuration_from_source(cmd, client, resource_group_name, name, slot, configuration_source,
+        update_slot_configuration_from_source(cmd, client, resource_group_name, webapp, slot, configuration_source,
                                               deployment_container_image_name, docker_registry_server_password,
                                               docker_registry_server_user,
                                               docker_registry_server_url=docker_registry_server_url)
@@ -3128,16 +3133,16 @@ def list_deployment_logs(cmd, resource_group, name, slot=None):
     return response.json() or []
 
 
-def config_slot_auto_swap(cmd, resource_group_name, name, slot, auto_swap_slot=None, disable=None):
+def config_slot_auto_swap(cmd, resource_group_name, webapp, slot, auto_swap_slot=None, disable=None):
     client = web_client_factory(cmd.cli_ctx)
-    site_config = client.web_apps.get_configuration_slot(resource_group_name, name, slot)
+    site_config = client.web_apps.get_configuration_slot(resource_group_name, webapp, slot)
     site_config.auto_swap_slot_name = '' if disable else (auto_swap_slot or 'production')
-    return _generic_site_operation(cmd.cli_ctx, resource_group_name, name, 'update_configuration', slot, site_config)
+    return _generic_site_operation(cmd.cli_ctx, resource_group_name, webapp, 'update_configuration', slot, site_config)
 
 
-def list_slots(cmd, resource_group_name, name):
+def list_slots(cmd, resource_group_name, webapp):
     client = web_client_factory(cmd.cli_ctx)
-    slots = list(client.web_apps.list_slots(resource_group_name, name))
+    slots = list(client.web_apps.list_slots(resource_group_name, webapp))
     for slot in slots:
         slot.name = slot.name.split('/')[-1]
         setattr(slot, 'app_service_plan', parse_resource_id(slot.server_farm_id)['name'])
@@ -3145,7 +3150,7 @@ def list_slots(cmd, resource_group_name, name):
     return slots
 
 
-def swap_slot(cmd, resource_group_name, name, slot, target_slot=None, preserve_vnet=None, action='swap'):
+def swap_slot(cmd, resource_group_name, webapp, slot, target_slot=None, preserve_vnet=None, action='swap'):
     client = web_client_factory(cmd.cli_ctx)
     # Default isPreserveVnet to 'True' if preserve_vnet is 'None'
     isPreserveVnet = preserve_vnet if preserve_vnet is not None else 'true'
@@ -3154,26 +3159,26 @@ def swap_slot(cmd, resource_group_name, name, slot, target_slot=None, preserve_v
     CsmSlotEntity = cmd.get_models('CsmSlotEntity')
     slot_swap_entity = CsmSlotEntity(target_slot=target_slot or 'production', preserve_vnet=isPreserveVnet)
     if action == 'swap':
-        poller = client.web_apps.begin_swap_slot(resource_group_name, name, slot, slot_swap_entity)
+        poller = client.web_apps.begin_swap_slot(resource_group_name, webapp, slot, slot_swap_entity)
         return poller
     if action == 'preview':
         if slot is None:
-            result = client.web_apps.apply_slot_config_to_production(resource_group_name, name, slot_swap_entity)
+            result = client.web_apps.apply_slot_config_to_production(resource_group_name, webapp, slot_swap_entity)
         else:
-            result = client.web_apps.apply_slot_configuration_slot(resource_group_name, name, slot, slot_swap_entity)
+            result = client.web_apps.apply_slot_configuration_slot(resource_group_name, webapp, slot, slot_swap_entity)
         return result
     # we will reset both source slot and target slot
     if target_slot is None:
-        client.web_apps.reset_production_slot_config(resource_group_name, name)
+        client.web_apps.reset_production_slot_config(resource_group_name, webapp)
     else:
-        client.web_apps.reset_slot_configuration_slot(resource_group_name, name, target_slot)
+        client.web_apps.reset_slot_configuration_slot(resource_group_name, webapp, target_slot)
     return None
 
 
-def delete_slot(cmd, resource_group_name, name, slot):
+def delete_slot(cmd, resource_group_name, webapp, slot):
     client = web_client_factory(cmd.cli_ctx)
     # TODO: once swagger finalized, expose other parameters like: delete_all_slots, etc...
-    client.web_apps.delete_slot(resource_group_name, name, slot)
+    client.web_apps.delete_slot(resource_group_name, webapp, slot)
 
 
 def set_traffic_routing(cmd, resource_group_name, name, distribution):
