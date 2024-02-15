@@ -264,7 +264,7 @@ interactions:
     uri: https://management.azure.com/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/clitest.rg000001/providers/Microsoft.ContainerRegistry/registries/functionappacrtest000004/listCredentials?api-version=2022-02-01-preview
   response:
     body:
-      string: '{"username":"functionappacrtest000004","passwords":[{"name":"password","value":"password"},{"name":"password2","value":"password"}]}'
+      string: '{"username":"functionappacrtest000004","passwords":[{"name":"password","value":""},{"name":"password2","value":""}]}'
     headers:
       api-supported-versions:
       - 2022-02-01-preview
