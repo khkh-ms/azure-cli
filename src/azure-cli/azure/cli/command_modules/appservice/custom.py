@@ -38,6 +38,7 @@ from azure.mgmt.applicationinsights import ApplicationInsightsManagementClient
 from azure.mgmt.web.models import KeyInfo
 
 from azure.cli.core.commands.client_factory import get_mgmt_service_client
+
 from azure.cli.core.commands import LongRunningOperation
 from azure.cli.core.util import in_cloud_console, shell_safe_json_parse, open_page_in_browser, get_json_object, \
     ConfiguredDefaultSetter, sdk_no_wait
@@ -1602,7 +1603,6 @@ def update_deployment_configs(cmd, resource_group_name, name,
     NameValuePair = cmd.get_models('NameValuePair')
 
     functionapp = get_raw_functionapp(cmd, resource_group_name, name)
-    functionapp_location = functionapp["location"]
 
     if ("functionAppConfig" in functionapp["properties"]):
         function_app_config = functionapp["properties"]["functionAppConfig"]
@@ -1639,28 +1639,20 @@ def update_deployment_configs(cmd, resource_group_name, name,
     # Authentication
     assign_identities = None
     if (deployment_storage_auth_type != None):
+        functionapp_deployment_storage["authentication"]["type"] = deployment_storage_auth_type
         if deployment_storage_auth_type == 'StorageAccountConnectionString':
             deployment_storage_conn_string = _get_storage_connection_string(cmd.cli_ctx, deployment_storage)
-            configs = get_site_configs(cmd, resource_group_name, name)
-            
-            if configs.app_settings is None:
-                configs.app_settings = []
-            configs.app_settings.append(NameValuePair(name='DEPLOYMENT_STORAGE_CONNECTION_STRING',
-                                                            value=deployment_storage_conn_string))
-            update_flex_functionapp_configuration(cmd, resource_group_name, name, configs)
-            
-            functionapp_deployment_storage["authentication"]["type"] = deployment_storage_auth_type
+            update_app_settings(cmd, resource_group_name, name,
+                                    ["DEPLOYMENT_STORAGE_CONNECTION_STRING={}".format(deployment_storage_conn_string)])
             functionapp_deployment_storage["authentication"]["userAssignedIdentityResourceId"] = None
             functionapp_deployment_storage["authentication"]["storageAccountConnectionStringName"] = "DEPLOYMENT_STORAGE_CONNECTION_STRING"
         elif deployment_storage_auth_type == 'SystemAssignedIdentity':
             assign_identities = ['[system]']
-            functionapp_deployment_storage["authentication"]["type"] = deployment_storage_auth_type
             functionapp_deployment_storage["authentication"]["userAssignedIdentityResourceId"] = None
             functionapp_deployment_storage["authentication"]["storageAccountConnectionStringName"] = None
         elif deployment_storage_auth_type == 'UserAssignedIdentity':
             assign_identities = [deployment_storage_auth_value]
-            functionapp_deployment_storage["authentication"]["type"] = deployment_storage_auth_type
-            deployment_storage_user_assigned_identity = _get_or_create_user_assigned_identity(cmd, resource_group_name, name, deployment_storage_auth_value, functionapp_location)
+            deployment_storage_user_assigned_identity = _get_or_create_user_assigned_identity(cmd, resource_group_name, name, deployment_storage_auth_value, None)
             functionapp_deployment_storage["authentication"]["userAssignedIdentityResourceId"] = deployment_storage_user_assigned_identity.id
             functionapp_deployment_storage["authentication"]["storageAccountConnectionStringName"] = None
             assign_identities = [deployment_storage_user_assigned_identity.id]
@@ -1668,23 +1660,27 @@ def update_deployment_configs(cmd, resource_group_name, name,
             raise ValidationError("Invalid value for --deployment-storage-auth-type. Please try again with a valid value.")
     functionapp["properties"]["functionAppConfig"] = function_app_config
 
-    result = update_flex_functionapp(cmd, resource_group_name, name, functionapp)
-    logger.warning("Updated deployment storage for function app '%s'", result)
+    deployment_result = update_flex_functionapp(cmd, resource_group_name, name, functionapp)
+    logger.warning("Updated deployment storage for function app '%s'", deployment_result)
     
     client = web_client_factory(cmd.cli_ctx)
     functionapp = client.web_apps.get(resource_group_name, name)
-    if (deployment_storage_auth_type != 'StorageAccountConnectionString' and assign_identities is not None):
-        identity = assign_identity(cmd, resource_group_name, name, assign_identities,'Contributor', None, None)
-        logger.warning("Assigned identity '%s' to function app '%s'", identity, name)
-        functionapp.identity = identity
-
-    if deployment_storage_auth_type == 'SystemAssignedIdentity':
-        _assign_deployment_storage_managed_identity_role(cmd.cli_ctx, deployment_storage, functionapp.identity.principal_id)
+    if deployment_storage_auth_type == 'UserAssignedIdentity':
+        assign_identity(cmd, resource_group_name, name, assign_identities)
+        logger.warning("Assigned user assigned identity '%s' to function app '%s'", deployment_storage_auth_value, name)
+        if (has_role_assignment_on_resource(cmd.cli_ctx, deployment_storage,
+                                                         deployment_storage_user_assigned_identity.principal_id) == False):
+            _assign_deployment_storage_managed_identity_role(cmd.cli_ctx, deployment_storage,
+                                                         deployment_storage_user_assigned_identity.principal_id)
+        logger.warning("_assign_deployment_storage_managed_identity_role '%s'", deployment_storage_auth_value)
+    elif deployment_storage_auth_type == 'SystemAssignedIdentity':
+        assign_identity(cmd, resource_group_name, name, assign_identities, STORAGE_BLOB_DATA_CONTRIBUTOR_ROLE_ID,
+                        None, deployment_storage.id)
         
     poller = client.web_apps.begin_create_or_update(resource_group_name, name, functionapp)
     functionapp = LongRunningOperation(cmd.cli_ctx)(poller)
     return functionapp
-    
+
 
 # for any modifications to the non-optional parameters, adjust the reflection logic accordingly
 # in the method
@@ -5247,12 +5243,29 @@ def _assign_deployment_storage_managed_identity_role(cli_ctx, deployment_storage
     role_definition_id = "/subscriptions/{}/providers/Microsoft.Authorization/roleDefinitions/{}".format(
         sub_id, STORAGE_BLOB_DATA_CONTRIBUTOR_ROLE_ID)
     auth_client = get_mgmt_service_client(cli_ctx, ResourceType.MGMT_AUTHORIZATION)
-    RoleAssignmentCreateParameters = get_sdk(cli_ctx, ResourceType.MGMT_AUTHORIZATION, 'RoleAssignmentCreateParameters',
+    RoleAssignmentCreateParameters = get_sdk(cli_ctx, ResourceType.MGMT_AUTHORIZATION, 'RoleAssignment',
                                              mod='models', operation_group='role_assignments')
     parameters = RoleAssignmentCreateParameters(role_definition_id=role_definition_id, principal_id=principal_id,
                                                 principal_type='ServicePrincipal')
     auth_client.role_assignments.create(scope=deployment_storage_account.id,
                                         role_assignment_name=str(uuid.uuid4()), parameters=parameters)
+
+def has_role_assignment_on_resource(cli_ctx, deployment_storage_account, principal_id):
+    from azure.cli.core.commands.client_factory import get_subscription_id
+    auth_client = get_mgmt_service_client(cli_ctx, ResourceType.MGMT_AUTHORIZATION)
+
+    sub_id = get_subscription_id(cli_ctx)
+    role_definition_id = "/subscriptions/{}/providers/Microsoft.Authorization/roleDefinitions/{}".format(
+        sub_id, STORAGE_BLOB_DATA_CONTRIBUTOR_ROLE_ID)
+
+    list_for_scope = auth_client.role_assignments.list_for_scope(deployment_storage_account.id)
+    logger.warning("list_for_scope %s", list_for_scope)
+    for assignment in list_for_scope:
+        if assignment.role_definition_id.lower() == role_definition_id.lower() and \
+                assignment.principal_id.lower() == principal_id.lower():
+            return True
+
+    return False
 
 
 def _parse_key_value_pairs(key_value_list):
