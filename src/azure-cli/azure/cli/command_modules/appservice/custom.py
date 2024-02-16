@@ -1661,18 +1661,18 @@ def update_deployment_configs(cmd, resource_group_name, name,
     functionapp["properties"]["functionAppConfig"] = function_app_config
 
     deployment_result = update_flex_functionapp(cmd, resource_group_name, name, functionapp)
-    logger.warning("Updated deployment storage for function app '%s'", deployment_result)
     
     client = web_client_factory(cmd.cli_ctx)
     functionapp = client.web_apps.get(resource_group_name, name)
     if deployment_storage_auth_type == 'UserAssignedIdentity':
         assign_identity(cmd, resource_group_name, name, assign_identities)
-        logger.warning("Assigned user assigned identity '%s' to function app '%s'", deployment_storage_auth_value, name)
         if (has_role_assignment_on_resource(cmd.cli_ctx, deployment_storage,
                                                          deployment_storage_user_assigned_identity.principal_id) == False):
             _assign_deployment_storage_managed_identity_role(cmd.cli_ctx, deployment_storage,
                                                          deployment_storage_user_assigned_identity.principal_id)
-        logger.warning("_assign_deployment_storage_managed_identity_role '%s'", deployment_storage_auth_value)
+        else:
+            logger.warning("User assigned identity '%s' already has the role assignment on the storage account '%s'",
+                            deployment_storage_user_assigned_identity.principal_id, deployment_storage_name)
     elif deployment_storage_auth_type == 'SystemAssignedIdentity':
         assign_identity(cmd, resource_group_name, name, assign_identities, STORAGE_BLOB_DATA_CONTRIBUTOR_ROLE_ID,
                         None, deployment_storage.id)
@@ -5259,7 +5259,6 @@ def has_role_assignment_on_resource(cli_ctx, deployment_storage_account, princip
         sub_id, STORAGE_BLOB_DATA_CONTRIBUTOR_ROLE_ID)
 
     list_for_scope = auth_client.role_assignments.list_for_scope(deployment_storage_account.id)
-    logger.warning("list_for_scope %s", list_for_scope)
     for assignment in list_for_scope:
         if assignment.role_definition_id.lower() == role_definition_id.lower() and \
                 assignment.principal_id.lower() == principal_id.lower():
