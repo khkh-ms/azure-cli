@@ -1600,8 +1600,6 @@ def update_deployment_configs(cmd, resource_group_name, name,
             'Please try again with --deployment-storage-auth-type set to UserAssignedIdentity.'
         )
 
-    NameValuePair = cmd.get_models('NameValuePair')
-
     functionapp = get_raw_functionapp(cmd, resource_group_name, name)
 
     if ("functionAppConfig" in functionapp["properties"]):
@@ -1660,13 +1658,13 @@ def update_deployment_configs(cmd, resource_group_name, name,
             raise ValidationError("Invalid value for --deployment-storage-auth-type. Please try again with a valid value.")
     functionapp["properties"]["functionAppConfig"] = function_app_config
 
-    deployment_result = update_flex_functionapp(cmd, resource_group_name, name, functionapp)
+    update_flex_functionapp(cmd, resource_group_name, name, functionapp)
     
     client = web_client_factory(cmd.cli_ctx)
     functionapp = client.web_apps.get(resource_group_name, name)
     if deployment_storage_auth_type == 'UserAssignedIdentity':
         assign_identity(cmd, resource_group_name, name, assign_identities)
-        if (has_role_assignment_on_resource(cmd.cli_ctx, deployment_storage,
+        if (_has_deployment_storage_role_assignment_on_resource(cmd.cli_ctx, deployment_storage,
                                                          deployment_storage_user_assigned_identity.principal_id) == False):
             _assign_deployment_storage_managed_identity_role(cmd.cli_ctx, deployment_storage,
                                                          deployment_storage_user_assigned_identity.principal_id)
@@ -1674,7 +1672,7 @@ def update_deployment_configs(cmd, resource_group_name, name,
             logger.warning("User assigned identity '%s' already has the role assignment on the storage account '%s'",
                             deployment_storage_user_assigned_identity.principal_id, deployment_storage_name)
     elif deployment_storage_auth_type == 'SystemAssignedIdentity':
-        assign_identity(cmd, resource_group_name, name, assign_identities, STORAGE_BLOB_DATA_CONTRIBUTOR_ROLE_ID,
+        assign_identity(cmd, resource_group_name, name, assign_identities, 'Storage Blob Data Contributor',
                         None, deployment_storage.id)
         
     poller = client.web_apps.begin_create_or_update(resource_group_name, name, functionapp)
@@ -5250,7 +5248,7 @@ def _assign_deployment_storage_managed_identity_role(cli_ctx, deployment_storage
     auth_client.role_assignments.create(scope=deployment_storage_account.id,
                                         role_assignment_name=str(uuid.uuid4()), parameters=parameters)
 
-def has_role_assignment_on_resource(cli_ctx, deployment_storage_account, principal_id):
+def _has_deployment_storage_role_assignment_on_resource(cli_ctx, deployment_storage_account, principal_id):
     from azure.cli.core.commands.client_factory import get_subscription_id
     auth_client = get_mgmt_service_client(cli_ctx, ResourceType.MGMT_AUTHORIZATION)
 
